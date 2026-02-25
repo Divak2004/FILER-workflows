@@ -141,23 +141,3 @@ params = {
     "outputFormat":   "json",
 }
 ```
-
----
-
-## Expected output
-
-`tracks.tsv` (1 row shown, columns abbreviated):
-
-```
-identifier      genome_build  assay    cell_type  biosample_type  tissue_category  life_stage  data_source  track_name                                          processed_file_download_url          tabix_file_url
-NGBLPL2W2SM2WC  hg38          WGB-Seq  B cell     Primary cell    Blood            Child       Blueprint    Blueprint B cell WGB-Seq peaks (bed4) [Life stage: Child]  https://tf.lisanwanglab.org/…bed.gz  https://tf.lisanwanglab.org/…bed.gz.tbi
-```
-
-You can verify a single known track directly:
-
-```bash
-curl -s "https://tf.lisanwanglab.org/FILER2/get_metadata.php?genomeBuild=hg38&trackID=NGBLPL2W2SM2WC" \
-  | jq '.[0] | {identifier, assay, cell_type, tissue_category, life_stage, track_name}'
-```
-
-The fixture at `examples/expected/recipe01_tracks.tsv` contains a known-good result to diff against.
