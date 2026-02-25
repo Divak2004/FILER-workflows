@@ -2,22 +2,26 @@
 
 ## What this does
 
-Given a set of standardized metadata filters (cell type, assay, biosample type, life stage, data source), query the FILER API and return a table of matching tracks saved as `tracks.tsv` (and optionally `tracks.json`).
+Query the FILER metadata endpoint with standardized filters (cell type, assay, tissue category,
+data source) and return a table of matching tracks saved as `tracks.tsv` (and optionally
+`tracks.json`).
 
-**Use when:** you want to assemble a relevant set of tracks before querying overlaps. Almost every downstream workflow starts here.
+**Use when:** you want to assemble a relevant set of tracks before querying overlaps. Almost
+every downstream workflow starts here.
 
 ---
 
 ## Inputs
 
-| Parameter | Example values | Required |
-|---|---|---|
-| `genome_build` | `hg19`, `hg38` | Yes |
-| `assay` | `ATAC-seq`, `ChIP-seq`, `DNase-seq` | No |
-| `cell_type` | `CD14+ monocyte`, `T cell` | No |
-| `biosample_type` | `primary cell`, `tissue` | No |
-| `life_stage` | `adult`, `embryonic` | No |
-| `data_source` | `ENCODE`, `Roadmap` | No |
+| Parameter | PHP param | Example values | Required |
+|---|---|---|---|
+| `genome_build` | `genomeBuild` | `hg19`, `hg38` | Yes |
+| `assay` | `assayType` | `ATAC-seq`, `ChIP-seq`, `DNase-seq` | No |
+| `cell_type` | `cellType` | `CD14+ monocyte`, `T cell` | No |
+| `tissue_category` | `tissueCategory` | `blood`, `brain` | No |
+| `data_source` | `dataSource` | `ENCODE`, `Roadmap`, `DASHR2` | No |
+| `track_id` | `trackID` | `ENCFF001ABC` | No |
+| `output_format` | `outputFormat` | `json` (default), `tsv` | No |
 
 At least one filter beyond `genome_build` is recommended to keep results manageable.
 
@@ -26,145 +30,68 @@ At least one filter beyond `genome_build` is recommended to keep results managea
 | File | Description |
 |---|---|
 | `tracks.tsv` | Tab-separated table of matching tracks |
-| `tracks.json` | Same content as JSON array (optional) |
+| `tracks.json` | Same content as a JSON array (optional) |
 
-**Required columns in `tracks.tsv`:**
-`track_id`, `genome_build`, `assay`, `cell_type`, `data_source`, `bed_gz_url`
+**Key columns returned by the API:**
 
-**Optional columns:** `biosample_type`, `life_stage`, `tissue`, `biosample`, `experiment_id`
+| Column | Example value |
+|---|---|
+| `identifier` | `NGBLPL2W2SM2WC` |
+| `genome_build` | `hg38` |
+| `assay` | `WGB-Seq`, `ATAC-seq` |
+| `cell_type` | `B cell`, `CD14+ monocyte` |
+| `biosample_type` | `Primary cell` |
+| `tissue_category` | `Blood` |
+| `system_category` | `Cardiovascular`, `Immune` |
+| `life_stage` | `Child`, `Adult` |
+| `data_source` | `Blueprint`, `ENCODE` |
+| `data_category` | `Methylation`, `Chromatin accessibility` |
+| `classification` | `WGB-Seq peaks` |
+| `output_type` | `peaks` |
+| `track_name` | `Blueprint B cell WGB-Seq peaks (bed4) [Life stage: Child]` |
+| `processed_file_download_url` | `https://tf.lisanwanglab.org/GADB/…bed.gz` |
+| `tabix_file_url` | `https://tf.lisanwanglab.org/GADB/…bed.gz.tbi` |
 
-**Time:** Typically seconds for a filtered query; up to ~30s for broad/unfiltered queries returning thousands of tracks.
+Additional columns also returned: `file_name`, `number_of_intervals`, `bp_covered`,
+`file_size`, `file_format`, `encode_experiment_id`, `biological_replicate`,
+`technical_replicate`, `antibody`, `downloaded_date`, `release_date`,
+`date_added_to_filer`, `processed_file_md5`, `link_out_url`, `track_description`,
+`biosamples_term_id`.
+
+**Time:** Typically 2–10 seconds depending on filter breadth.
 
 ---
 
 ## Prerequisites
 
 ```bash
-# Python
-pip install requests pandas
+# 1. Ensure you are in the FILER-Workflows folder
 
-# R
-install.packages(c("httr", "jsonlite", "dplyr"))
+# 2. Ensure your venv is active
+source venv/bin/activate
+
+# 3. Install the project and its core dependencies
+pip install -e .
 ```
 
-Access to the FILER API endpoint (no authentication required for public data).
+No authentication required for public FILER data.
 
 ---
 
 ## Python (recommended)
 
-### Quick one-liner (script)
+### Example script
 
 ```bash
-python scripts/python/filer_search_tracks.py \
+python src/scripts/python/filer_search_tracks.py \
   --genome-build hg38 \
   --assay "ATAC-seq" \
-  --cell-type "CD14+ monocyte" \
   --data-source ENCODE \
-  --out tracks.tsv \
-  --json   # also write tracks.json
+  --out output/01-track-discovery/tracks.tsv \
+  --json
 ```
 
-### Full script: `scripts/python/filer_search_tracks.py`
-
-```python
-#!/usr/bin/env python3
-"""
-Recipe 1 — Find FILER tracks by metadata filters.
-
-Usage:
-  python filer_search_tracks.py \
-    --genome-build hg38 \
-    --assay "ATAC-seq" \
-    --cell-type "CD14+ monocyte" \
-    --data-source ENCODE \
-    --out tracks.tsv
-"""
-import argparse
-import sys
-import requests
-import pandas as pd
-
-BASE_URL = "https://tf.lisanwanglab.org/FILER2"
-
-REQUIRED_COLS = [
-    "track_id", "genome_build", "assay",
-    "cell_type", "data_source", "bed_gz_url",
-]
-
-
-def search_tracks(genome_build: str, filters: dict) -> pd.DataFrame:
-    params = {"genome_build": genome_build, **filters}
-    r = requests.get(f"{BASE_URL}/api/tracks", params=params, timeout=60)
-    r.raise_for_status()
-    data = r.json()
-
-    # Adjust key to match actual API response structure
-    records = data.get("results") or data.get("tracks") or data
-    df = pd.DataFrame(records)
-
-    # Reorder: required columns first, then any extras
-    available_required = [c for c in REQUIRED_COLS if c in df.columns]
-    extras = [c for c in df.columns if c not in REQUIRED_COLS]
-    return df[available_required + extras]
-
-
-def main():
-    p = argparse.ArgumentParser(description="Search FILER tracks by metadata filters.")
-    p.add_argument("--genome-build", default="hg38", choices=["hg19", "hg38"])
-    p.add_argument("--assay", help='e.g. "ATAC-seq"')
-    p.add_argument("--cell-type", help='e.g. "CD14+ monocyte"')
-    p.add_argument("--biosample-type", help='e.g. "primary cell"')
-    p.add_argument("--life-stage", help='e.g. "adult"')
-    p.add_argument("--data-source", help='e.g. "ENCODE"')
-    p.add_argument("--out", default="tracks.tsv", help="Output TSV path")
-    p.add_argument("--json", action="store_true", help="Also write tracks.json")
-    args = p.parse_args()
-
-    filters = {k: v for k, v in {
-        "assay":          args.assay,
-        "cell_type":      args.cell_type,
-        "biosample_type": args.biosample_type,
-        "life_stage":     args.life_stage,
-        "data_source":    args.data_source,
-    }.items() if v is not None}
-
-    df = search_tracks(args.genome_build, filters)
-    df.to_csv(args.out, sep="\t", index=False)
-    print(f"[recipe01] Wrote {len(df)} tracks → {args.out}", file=sys.stderr)
-
-    if args.json:
-        json_out = args.out.replace(".tsv", ".json")
-        df.to_json(json_out, orient="records", indent=2)
-        print(f"[recipe01] Wrote {json_out}", file=sys.stderr)
-
-
-if __name__ == "__main__":
-    main()
-```
-
-### Notebook / inline snippet
-
-```python
-import requests
-import pandas as pd
-
-BASE_URL = "https://tf.lisanwanglab.org/FILER2"
-
-params = {
-    "genome_build": "hg38",
-    "assay":        "ATAC-seq",
-    "cell_type":    "CD14+ monocyte",
-    "data_source":  "ENCODE",
-}
-
-r = requests.get(f"{BASE_URL}/api/tracks", params=params, timeout=60)
-r.raise_for_status()
-
-df = pd.DataFrame(r.json()["results"])  # adjust key if needed
-print(df.shape)
-df.head()
-```
+### Full script: [`src/scripts/python/filer_search_tracks.py`](../../src/scripts/python/filer_search_tracks.py).
 
 ---
 
@@ -173,121 +100,64 @@ df.head()
 ```bash
 BASE="https://tf.lisanwanglab.org/FILER2"
 
-curl -sG "${BASE}/api/tracks" \
-  --data-urlencode "genome_build=hg38" \
-  --data-urlencode "assay=ATAC-seq" \
-  --data-urlencode "cell_type=CD14+ monocyte" \
-  --data-urlencode "data_source=ENCODE" \
-  > tracks.json
+curl -sG "${BASE}/get_metadata.php" \
+  --data-urlencode "genomeBuild=hg38" \
+  --data-urlencode "assayType=ATAC-seq" \
+  --data-urlencode "dataSource=ENCODE" \
+  --data-urlencode "outputFormat=json" \
+  > output/01-track-discovery/tracks.json
 
 # Convert to TSV (requires jq)
 jq -r '
-  ["track_id","genome_build","assay","cell_type","data_source","bed_gz_url"],
-  (.results[] | [.track_id,.genome_build,.assay,.cell_type,.data_source,.bed_gz_url])
+  ["identifier","genome_build","assay","cell_type","biosample_type",
+   "tissue_category","life_stage","data_source","track_name","processed_file_download_url","tabix_file_url"],
+  (.[] | [
+    .identifier,.genome_build,.assay,.cell_type,.biosample_type,
+    .tissue_category,.life_stage,.data_source,.track_name,.processed_file_download_url,.tabix_file_url
+  ])
   | @tsv
-' tracks.json > tracks.tsv
+' output/01-track-discovery/tracks.json > output/01-track-discovery/tracks.tsv
 ```
 
 ---
 
-## R (secondary)
+## Advanced: raw `filterString` (jq syntax)
 
-```r
-library(httr)
-library(jsonlite)
-library(dplyr)
+For power users, you can pass a raw jq filter string directly. This bypasses the named
+parameters and gives you full flexibility:
 
-BASE_URL <- "https://tf.lisanwanglab.org/FILER2"
+```bash
+curl -sG "${BASE}/get_metadata.php" \
+  --data-urlencode 'filterString=.data_source == "ENCODE" and .assay == "ATAC-seq"' \
+  --data-urlencode "genomeBuild=hg38" \
+  --data-urlencode "outputFormat=json" \
+  > output/01-track-discovery/tracks.json
+```
 
-search_tracks <- function(genome_build = "hg38", ...) {
-  filters <- Filter(Negate(is.null), list(genome_build = genome_build, ...))
-  resp    <- GET(paste0(BASE_URL, "/api/tracks"), query = filters)
-  stop_for_status(resp)
-  as_tibble(fromJSON(content(resp, as = "text", encoding = "UTF-8"))$results)
+```python
+params = {
+    "genomeBuild":    "hg38",
+    "filterString":   '.data_source == "ENCODE" and .assay == "ATAC-seq"',
+    "outputFormat":   "json",
 }
-
-tracks <- search_tracks(
-  genome_build = "hg38",
-  assay        = "ATAC-seq",
-  cell_type    = "CD14+ monocyte",
-  data_source  = "ENCODE"
-)
-
-write.table(tracks, "tracks.tsv", sep = "\t", row.names = FALSE, quote = FALSE)
-print(tracks)
 ```
 
 ---
 
 ## Expected output
 
-`tracks.tsv` (first 3 rows, columns abbreviated):
+`tracks.tsv` (1 row shown, columns abbreviated):
 
 ```
-track_id          genome_build  assay     cell_type         data_source  bed_gz_url
-ENCFF001ABC       hg38          ATAC-seq  CD14+ monocyte    ENCODE       https://...
-ENCFF002DEF       hg38          ATAC-seq  CD14+ monocyte    ENCODE       https://...
-ENCFF003GHI       hg38          ATAC-seq  CD14+ monocyte    ENCODE       https://...
+identifier      genome_build  assay    cell_type  biosample_type  tissue_category  life_stage  data_source  track_name                                          processed_file_download_url          tabix_file_url
+NGBLPL2W2SM2WC  hg38          WGB-Seq  B cell     Primary cell    Blood            Child       Blueprint    Blueprint B cell WGB-Seq peaks (bed4) [Life stage: Child]  https://tf.lisanwanglab.org/…bed.gz  https://tf.lisanwanglab.org/…bed.gz.tbi
 ```
 
-The fixture at `examples/expected/recipe01_tracks.tsv` contains a known-good 20-row result you can diff against.
-
----
-
-## Discover available filter values
-
-Not sure which values are valid for a given field? Use the metadata values endpoint:
+You can verify a single known track directly:
 
 ```bash
-# List all available assay types
-curl -sG "${BASE}/api/metadata/values" \
-  --data-urlencode "field=assay" \
-  --data-urlencode "include_counts=true" \
-  | jq '.values[:10]'
-
-# Filter cell types relevant to a specific assay context
-curl -sG "${BASE}/api/metadata/values" \
-  --data-urlencode "field=cell_type" \
-  --data-urlencode "q=mono" \
-  --data-urlencode "filters=assay:ATAC-seq" \
-  --data-urlencode "sort=count" \
-  | jq '.values'
+curl -s "https://tf.lisanwanglab.org/FILER2/get_metadata.php?genomeBuild=hg38&trackID=NGBLPL2W2SM2WC" \
+  | jq '.[0] | {identifier, assay, cell_type, tissue_category, life_stage, track_name}'
 ```
 
-```python
-# Python equivalent
-r = requests.get(f"{BASE_URL}/api/metadata/values", params={
-    "field": "cell_type",
-    "q": "mono",
-    "filters": "assay:ATAC-seq",
-    "sort": "count",
-    "include_counts": "true",
-}, timeout=30)
-print(r.json()["values"])
-```
-
----
-
-## Scale-up notes
-
-**Large result sets:** If a broad query returns thousands of tracks, check whether the endpoint supports `limit` / `offset` or `page` / `page_size` pagination and loop accordingly.
-
-**Caching:** Save `tracks.tsv` with a datestamp (e.g., `tracks_20250224.tsv`) so runs are reproducible. The Track Set manifest in Recipe 1.3 formalizes this pattern.
-
-**Batching multiple filter combinations:** Loop over a list of filter dicts and concatenate results into a single DataFrame, then deduplicate on `track_id`.
-
-```python
-filter_sets = [
-    {"assay": "ATAC-seq",  "cell_type": "CD14+ monocyte"},
-    {"assay": "DNase-seq", "cell_type": "CD14+ monocyte"},
-]
-df = pd.concat([search_tracks("hg38", f) for f in filter_sets]).drop_duplicates("track_id")
-```
-
----
-
-## Next steps
-
-- **Recipe 1.3** — Turn this track list into a reusable Track Set manifest (with provenance, date, filters)
-- **Recipe 3.1** — Query overlaps for a genomic region against this track set
-- **Recipe 4.1** — Summarize and plot overlap counts by assay / cell type
+The fixture at `examples/expected/recipe01_tracks.tsv` contains a known-good result to diff against.

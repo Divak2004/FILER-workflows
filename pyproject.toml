@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=42"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "filerpy"
+version = "0.1.0"
+description = "Thin Python client for the FILER functional genomics database"
+requires-python = ">=3.9"
+dependencies = [
+    "requests",
+    "pandas",
+    "matplotlib",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-mock"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
