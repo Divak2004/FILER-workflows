@@ -80,13 +80,37 @@ No authentication required for public FILER data.
 
 ## Python (recommended)
 
-### Example script
+### Example scripts
+
+This script demonstrates all parameters that you can use, with the exception of track-id since it would return at most 1 track back. Feel free to add, remove, or change any lines to suit your needs.
 
 ```bash
 python src/scripts/python/filer_search_tracks.py \
   --genome-build hg38 \
   --assay "ATAC-seq" \
-  --data-source ENCODE \
+  --data-source "ENCODE" \
+  --cell-type "K562" \
+  --tissue-category "Blood" \
+  --out output/01-track-discovery/tracks.tsv \
+  --json
+```
+
+This searches for tracks that pertain to brain tissues and use Hi-C assays.
+
+```bash
+python src/scripts/python/filer_search_tracks.py \
+  --genome-build hg38 \
+  --assay "Hi-C" \
+  --tissue-category "Brain" \
+  --out output/01-track-discovery/tracks.tsv \
+  --json
+```
+
+This searches up a track by its ID.
+```bash
+python src/scripts/python/filer_search_tracks.py \
+  --genome-build hg38 \
+  --track-id "NGBLPL2W2SM2WC" \
   --out output/01-track-discovery/tracks.tsv \
   --json
 ```
@@ -95,7 +119,8 @@ python src/scripts/python/filer_search_tracks.py \
 
 ---
 
-## Bash (minimal)
+## Bash (minimal) 
+Make sure that jq is installed on your computer.
 
 ```bash
 BASE="https://tf.lisanwanglab.org/FILER2"
@@ -107,7 +132,6 @@ curl -sG "${BASE}/get_metadata.php" \
   --data-urlencode "outputFormat=json" \
   > output/01-track-discovery/tracks.json
 
-# Convert to TSV (requires jq)
 jq -r '
   ["identifier","genome_build","assay","cell_type","biosample_type",
    "tissue_category","life_stage","data_source","track_name","processed_file_download_url","tabix_file_url"],
