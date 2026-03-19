@@ -3,21 +3,26 @@ filerpy.client
 ~~~~~~~~~~~~~~
 Thin HTTP client for the FILER web API endpoints.
 
+This module is responsible only for making HTTP requests and returning raw
+data. All business logic (batching, flattening, filtering, error handling)
+lives in the individual recipe scripts.
+
 Typical usage::
 
-    from filerpy.client import search_tracks, get_metadata_values
+    from filerpy.client import search_tracks, get_metadata, get_overlaps,
+                               get_overlapping_tracks, get_metadata_values
 
-    df = search_tracks("hg38", assayType="ATAC-seq", cellType="CD14+ monocyte")
-    print(df[["identifier", "assay", "cell_type", "tabix_file_url"]])
+    df  = search_tracks("hg38", assayType="ATAC-seq", cellType="CD14+ monocyte")
+    raw = get_overlaps("chr19:44905791-44909393", ["NGBLPL2W2SM2WC"])
 """
 from __future__ import annotations
 
-import time
 import logging
+import time
 from typing import Optional
 
-import requests
 import pandas as pd
+import requests
 
 log = logging.getLogger(__name__)
 
@@ -91,7 +96,7 @@ def _reorder(df: pd.DataFrame, standard_cols: list[str]) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
-# Public API
+# Public API — metadata
 # ---------------------------------------------------------------------------
 
 def search_tracks(
@@ -130,12 +135,7 @@ def search_tracks(
     Returns
     -------
     pd.DataFrame
-        One row per matching track. Standard columns appear first:
-        ``identifier``, ``genome_build``, ``assay``, ``cell_type``,
-        ``biosample_type``, ``tissue_category``, ``system_category``,
-        ``life_stage``, ``data_source``, ``data_category``,
-        ``classification``, ``output_type``, ``track_name``,
-        ``processed_file_download_url``, ``tabix_file_url``.
+        One row per matching track, with standard columns first.
 
     Examples
     --------
@@ -151,7 +151,6 @@ def search_tracks(
         params["filterString"] = filter_string
     else:
         for key, val in kwargs.items():
-            # Accept both friendly names and PHP names
             php_key = _METADATA_PARAM_MAP.get(key, key)
             params[php_key] = val
 
@@ -163,8 +162,31 @@ def search_tracks(
         log.info("search_tracks: no results for params=%s", params)
         return pd.DataFrame(columns=METADATA_STANDARD_COLS)
 
-    df = pd.DataFrame(data)
-    return _reorder(df, METADATA_STANDARD_COLS)
+    return _reorder(pd.DataFrame(data), METADATA_STANDARD_COLS)
+
+
+def get_metadata(track_id: str, genome_build: str = "hg38") -> dict:
+    """
+    Fetch metadata for a single track by ID.
+
+    Parameters
+    ----------
+    track_id : str
+        FILER track identifier, e.g. ``"NGBLPL2W2SM2WC"``.
+    genome_build : str
+        ``"hg38"`` (default) or ``"hg19"``.
+
+    Returns
+    -------
+    dict
+        Raw metadata record for the track.
+
+    Examples
+    --------
+    >>> record = get_metadata("NGBLPL2W2SM2WC")
+    """
+    r = _get(ENDPOINTS["metadata"], {"genomeBuild": genome_build, "trackID": track_id})
+    return r.json()[0]
 
 
 def get_metadata_values(
@@ -219,3 +241,79 @@ def get_metadata_values(
     log.debug("get_metadata_values params: %s", params)
     r = _get(url, params)
     return r.json().get("values", [])
+
+
+# ---------------------------------------------------------------------------
+# Public API — overlaps
+# ---------------------------------------------------------------------------
+
+def get_overlaps(region: str, track_ids: list[str]) -> list[dict]:
+    """
+    Fetch raw overlap records for a batch of track IDs and a region.
+
+    This is a single GET request with no batching or flattening — that
+    logic lives in ``filer_find_overlaps.py``.
+
+    Parameters
+    ----------
+    region : str
+        Genomic region in ``chrN:start-end`` format,
+        e.g. ``"chr19:44905791-44909393"``.
+    track_ids : list[str]
+        Track identifiers for this batch.
+
+    Returns
+    -------
+    list[dict]
+        Raw response from the server. Each dict has ``Identifier``,
+        ``queryRegion``, and ``features`` (a list of interval records).
+
+    Examples
+    --------
+    >>> records = get_overlaps("chr19:44905791-44909393", ["NGBLPL2W2SM2WC"])
+    """
+    r = _get(
+        ENDPOINTS["overlaps"],
+        params={"region": region, "trackIDs": ",".join(track_ids)},
+        timeout=300,
+    )
+    return r.json()
+
+
+def get_overlapping_tracks(
+    region: str,
+    genome_build: str,
+    **params,
+) -> list[dict]:
+    """
+    Find all tracks in a genome build whose intervals overlap a region.
+
+    This is a single GET request with no filtering or DataFrame logic —
+    that lives in ``filer_coordinate_search.py``.
+
+    Parameters
+    ----------
+    region : str
+        Genomic region in ``chrN:start-end`` format,
+        e.g. ``"chr1:100000-200000"``.
+    genome_build : str
+        ``"hg38"`` or ``"hg19"``.
+    **params
+        Additional GET parameters passed directly to the endpoint, e.g.
+        ``filterString``, ``fullMetadata``, ``countOnly``.
+
+    Returns
+    -------
+    list[dict]
+        Raw response from the server, one dict per overlapping track.
+
+    Examples
+    --------
+    >>> records = get_overlapping_tracks("chr1:100000-200000", "hg38", countOnly=1)
+    """
+    r = _get(
+        ENDPOINTS["region_overlaps"],
+        params={"region": region, "genomeBuild": genome_build, "outputFormat": "json", **params},
+        timeout=300,
+    )
+    return r.json()
