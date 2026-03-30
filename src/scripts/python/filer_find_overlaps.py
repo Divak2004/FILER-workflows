@@ -5,6 +5,11 @@ Recipe 2 — Extract genomic overlaps from specific tracks.
 Queries the FILER overlaps endpoint to retrieve data intervals from 
 specific tracks overlapping a given genomic region.
 
+Output columns:
+  - Identifier   : track ID
+  - queryRegion  : the region passed to the query
+  - hitString    : all feature fields joined by "@@@", in API-provided order
+
 Usage:
   # Manual IDs
   python filer_find_overlaps.py --region "chr1:100000-200000" --track-ids "NG123,NG129"
@@ -26,6 +31,52 @@ ENDPOINT = "https://tf.lisanwanglab.org/FILER2/get_overlaps.php"
 # Keep chunks small enough to stay under the ~8KB URL limit.
 # ~250 IDs × ~6 chars each + region + overhead ≈ safe margin.
 CHUNK_SIZE = 250
+
+HIT_SEP = "@@@"
+
+
+def _feature_to_hit_string(feature: dict) -> str:
+    """Serialise a single feature dict into a @@@-delimited hit string.
+
+    We rely on the API's field ordering (track-specific features can vary),
+    so we simply join the dict values in iteration order.
+    """
+    return HIT_SEP.join("" if v is None else str(v) for v in feature.values())
+
+def _normalize_response(records: list) -> pd.DataFrame:
+    """Convert a list of API records into the flat Identifier/queryRegion/hitString schema.
+
+    Each record is expected to have the shape:
+        {
+            "Identifier": "NGADBDWBBCVVVX",
+            "queryRegion": "chr1:100000-200000",
+            "features": [ { ... }, ... ]
+        }
+
+    One output row is produced per feature hit.  If a record carries no
+    'features' key (flat response), the entire record minus Identifier and
+    queryRegion is treated as a single feature.
+    """
+    rows = []
+    for rec in records:
+        identifier = rec.get("Identifier", rec.get("identifier", ""))
+        query_region = rec.get("queryRegion", rec.get("query_region", ""))
+
+        features = rec.get("features")
+        if features is None:
+            # Flat record — treat everything except the two key fields as a feature
+            feature = {k: v for k, v in rec.items() if k not in ("Identifier", "identifier",
+                                                                    "queryRegion", "query_region")}
+            features = [feature]
+
+        for feat in features:
+            rows.append({
+                "Identifier": identifier,
+                "queryRegion": query_region,
+                "hitString": _feature_to_hit_string(feat),
+            })
+
+    return pd.DataFrame(rows, columns=["Identifier", "queryRegion", "hitString"])
 
 
 def _get_chunk(region: str, track_ids_str: str) -> pd.DataFrame:
@@ -54,12 +105,12 @@ def _get_chunk(region: str, track_ids_str: str) -> pd.DataFrame:
         sys.exit(1)
 
     if isinstance(data, list):
-        return pd.DataFrame(data)
+        return _normalize_response(data)
     elif isinstance(data, dict):
         for key in ("data", "results", "records", "overlaps"):
             if key in data and isinstance(data[key], list):
-                return pd.DataFrame(data[key])
-        return pd.DataFrame([data])
+                return _normalize_response(data[key])
+        return _normalize_response([data])
     else:
         print(f"[recipe02] Unexpected response type: {type(data)}", file=sys.stderr)
         sys.exit(1)

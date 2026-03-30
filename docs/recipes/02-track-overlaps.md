@@ -29,16 +29,17 @@ Recipe 1 via `--file`. If both are given, `--track-ids` takes precedence.
 | `overlaps.tsv` | Tab-separated table of overlapping intervals, one row per feature |
 | `overlaps.json` | Same content as a JSON array (optional) |
 
-**Key columns returned by the API:**
+**Output columns from this recipe:**
 
 | Column | Example value |
 |---|---|
 | `Identifier` | `NGBLPL2W2SM2WC` |
 | `queryRegion` | `chr19:44905791-44909393` |
-| `features` | Array of interval records overlapping the query region |
+| `hitString` | Feature fields joined by `@@@`, using the API-provided field order for that feature |
 
-The shape of `features` depends on the track type (e.g. BED peaks will include `chrom`,
-`start`, `end`, `name`, `score`).
+The `hitString` field set/order (and thus the number of tokens) varies by track type.
+Each token corresponds to one value from the underlying feature record returned by FILER.
+See the schema file under the res folder.
 
 **Time:** Varies with the number of tracks and interval density. Expect ~1–2 seconds per
 batch of 50 tracks; 1960 tracks across 40 batches typically completes in 1–3 minutes.
@@ -114,9 +115,9 @@ curl -sG "${BASE}/get_overlaps.php" \
   > output/02-track-overlaps/overlaps.json
 
 jq -r '
-  ["identifier","queryRegion","chrom","start","end","name","score"],
+  ["Identifier","queryRegion","hitString"],
   (.[] | .Identifier as $id | .queryRegion as $qr |
-    .features[] | [$id, $qr, .chrom, .start, .end, .name, .score]
+    .features[] | [$id, $qr, (to_entries | map(.value|tostring) | join("@@@"))]
   )
   | @tsv
 ' output/02-track-overlaps/overlaps.json > output/02-track-overlaps/overlaps.tsv
@@ -132,12 +133,12 @@ jq -r '
 
 **Chunking:** The server only reads query string parameters (`$_GET`), so both `region` and
 `trackIDs` must be passed as GET params. To stay within the server's URL length limit, the
-Python script automatically splits large ID lists into batches of 50 and merges the results.
+Python script automatically splits large ID lists into batches of `--chunk-size` (default 250) and merges the results.
 Use `--chunk-size` to tune this if needed.
 
 **Track IDs not found:** If a track ID does not exist in FILER, the API returns an error
 object inside `features` for that track rather than failing the whole request. These rows will
-appear in the output with an `ERROR` field and can be filtered out downstream.
+appear in the output with an `ERROR` token inside `hitString` and can be filtered out downstream.
 
 **Upstream dependency:** This recipe is designed to run after Recipe 1. The `--file` +
 `--id-col identifier` pattern directly accepts the `tracks.tsv` output from Recipe 1 without

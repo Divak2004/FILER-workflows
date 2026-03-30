@@ -317,3 +317,123 @@ def get_overlapping_tracks(
         timeout=300,
     )
     return r.json()
+
+
+# ---------------------------------------------------------------------------
+# Public convenience helpers — overlaps
+# ---------------------------------------------------------------------------
+
+HIT_SEP = "@@@"
+DEFAULT_CHUNK_SIZE = 250
+
+
+def load_ids_from_file(path: str, id_col: str) -> list[str]:
+    """
+    Load track IDs from a TSV or JSON file.
+
+    This mirrors the CLI script's `--file/--id-col` behavior so notebooks can
+    share the same inputs.
+    """
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"File '{path}' not found.")
+
+    if path.endswith(".json"):
+        with open(path, "r") as f:
+            data = json.load(f)
+        df = pd.DataFrame(data)
+    else:
+        df = pd.read_csv(path, sep="\t")
+
+    if id_col not in df.columns:
+        available = ", ".join(df.columns.tolist())
+        raise KeyError(f"Column '{id_col}' not found in '{path}'. Available columns: {available}")
+
+    return df[id_col].dropna().unique().tolist()
+
+
+def _feature_to_hit_string(feature: dict) -> str:
+    """
+    Serialize a feature dict into a @@@-delimited hit string.
+
+    We rely on the API's field ordering by joining dict values in iteration
+    order. Field sets/order can vary by track type, so we do not impose any
+    fixed schema here.
+    """
+    return HIT_SEP.join("" if v is None else str(v) for v in feature.values())
+
+
+def _normalize_overlaps_records(records: list[dict]) -> pd.DataFrame:
+    """Flatten API overlap records into Identifier/queryRegion/hitString rows."""
+    rows: list[dict] = []
+    for rec in records:
+        identifier = rec.get("Identifier", rec.get("identifier", ""))
+        query_region = rec.get("queryRegion", rec.get("query_region", ""))
+
+        features = rec.get("features")
+        if features is None:
+            # Flat record — treat everything except Identifier/queryRegion as a feature.
+            feature = {
+                k: v
+                for k, v in rec.items()
+                if k not in ("Identifier", "identifier", "queryRegion", "query_region")
+            }
+            features = [feature]
+
+        for feat in features:
+            rows.append(
+                {
+                    "Identifier": identifier,
+                    "queryRegion": query_region,
+                    "hitString": _feature_to_hit_string(feat),
+                }
+            )
+
+    return pd.DataFrame(rows, columns=["Identifier", "queryRegion", "hitString"])
+
+
+def _normalize_overlaps_response(data) -> pd.DataFrame:
+    """Handle list vs wrapped payload shapes returned by the server."""
+    if isinstance(data, list):
+        return _normalize_overlaps_records(data)
+    if isinstance(data, dict):
+        for key in ("data", "results", "records", "overlaps"):
+            if key in data and isinstance(data[key], list):
+                return _normalize_overlaps_records(data[key])
+        return _normalize_overlaps_records([data])
+    raise TypeError(f"Unexpected overlaps response type: {type(data)}")
+
+
+def fetch_overlaps(
+    region: str,
+    ids: list[str],
+    chunk_size: int = DEFAULT_CHUNK_SIZE,
+) -> pd.DataFrame:
+    """
+    Fetch overlaps and return a flat DataFrame with a `hitString` column.
+
+    Each feature dict in the API response is converted into `hitString` by
+    joining its values with "@@@", preserving API-provided ordering.
+    """
+    if not ids:
+        return pd.DataFrame(columns=["Identifier", "queryRegion", "hitString"])
+
+    chunks = [ids[i : i + chunk_size] for i in range(0, len(ids), chunk_size)]
+    frames: list[pd.DataFrame] = []
+
+    for chunk in chunks:
+        # Use the standard endpoint registry (like other APIs in this module)
+        r = _get(
+            ENDPOINTS["overlaps"],
+            params={"region": region, "trackIDs": ",".join(chunk)},
+            timeout=300,
+        )
+        data = r.json()
+        df = _normalize_overlaps_response(data)
+        if not df.empty:
+            frames.append(df)
+
+    return (
+        pd.concat(frames, ignore_index=True)
+        if frames
+        else pd.DataFrame(columns=["Identifier", "queryRegion", "hitString"])
+    )
