@@ -25,7 +25,7 @@ Recipe 3 (coordinate search) or Recipe 10 (full end-to-end workflow).
 | `--file` | `input/rsids.txt` | One of `--rsid` or `--file` |
 | `--genome-build` | `GRCh38` (default), `GRCh37` | No |
 | `--chunk-size` | `200` (default) | No |
-| `--out` | `output/11-rsid-to-positions/results.tsv` | No |
+| `--out` | `output/4-rsid-to-positions/results.tsv` | No |
 
 ### Input file format (for `--file`)
 
@@ -43,7 +43,7 @@ rs7903146
 
 | File | Description |
 |---|---|
-| `output/11-rsid-to-positions/results.tsv` | One row per rsID–mapping, with region string and allele info |
+| `output/4-rsid-to-positions/results.tsv` | One row per rsID–mapping, with region string and allele info |
 
 **Key columns:**
 
@@ -93,7 +93,7 @@ Single rsID lookup:
 python src/scripts/python/rsid_to_positions.py \
   --rsid rs699 \
   --genome-build GRCh38 \
-  --out output/11-rsid-to-positions/results.tsv
+  --out output/4-rsid-to-positions/results.tsv
 ```
 
 Batch lookup from a file:
@@ -101,7 +101,7 @@ Batch lookup from a file:
 python src/scripts/python/rsid_to_positions.py \
   --file input/rsids.txt \
   --genome-build GRCh38 \
-  --out output/11-rsid-to-positions/results.tsv
+  --out output/4-rsid-to-positions/results.tsv
 ```
 
 Use GRCh37 (hg19) coordinates:
@@ -109,7 +109,7 @@ Use GRCh37 (hg19) coordinates:
 python src/scripts/python/rsid_to_positions.py \
   --file input/rsids.txt \
   --genome-build GRCh37 \
-  --out output/11-rsid-to-positions/results.tsv
+  --out output/4-rsid-to-positions/results.tsv
 ```
 
 ### Full script: [`src/scripts/python/rsid_to_positions.py`](../../src/scripts/python/rsid_to_positions.py)
@@ -127,10 +127,10 @@ directly to Recipe 3 or Recipe 10.
 # Step 1: resolve rsID to region
 python src/scripts/python/rsid_to_positions.py \
   --rsid rs699 \
-  --out output/11-rsid-to-positions/results.tsv
+  --out output/4-rsid-to-positions/results.tsv
 
 # Step 2: extract the region string and pass to Recipe 3
-REGION=$(awk 'NR==2 {print $5}' output/11-rsid-to-positions/results.tsv)
+REGION=$(awk 'NR==2 {print $5}' output/4-rsid-to-positions/results.tsv)
 
 python src/scripts/python/filer_coordinate_search.py \
   --region "$REGION" \
@@ -147,10 +147,10 @@ python src/scripts/python/filer_coordinate_search.py \
   # Step 1: resolve rsID to region
   python src/scripts/python/rsid_to_positions.py \
     --rsid rs699 \
-    --out output/11-rsid-to-positions/results.tsv
+    --out output/4-rsid-to-positions/results.tsv
 
   # Step 2: extract the region string and pass to Recipe 3
-  REGION=$(awk 'NR==2 {print $5}' output/11-rsid-to-positions/results.tsv)
+  REGION=$(awk 'NR==2 {print $5}' output/4-rsid-to-positions/results.tsv)
 
   python src/scripts/python/filer_coordinate_search.py \
     --region "$REGION" \
@@ -158,7 +158,7 @@ python src/scripts/python/filer_coordinate_search.py \
     --count-only 0 \
     --out output/03-coordinate-search/search_results.tsv
 
-  # Step 3: extract overlapping intervals from discovered tracks
+  # Step 3: extract overlapping intervals from discovered tracks. Be warned that this may not finish running since recipe 3 may output a lot of tracks
   python src/scripts/python/filer_find_overlaps.py \
     --region "$REGION" \
     --file output/03-coordinate-search/search_results.tsv \
@@ -172,10 +172,10 @@ python src/scripts/python/filer_coordinate_search.py \
 # Step 1: resolve all rsIDs
 python src/scripts/python/rsid_to_positions.py \
   --file input/rsids.txt \
-  --out output/11-rsid-to-positions/results.tsv
+  --out output/4-rsid-to-positions/results.tsv
 
 # Step 2: loop over each resolved region
-tail -n +2 output/11-rsid-to-positions/results.tsv | cut -f5 | while read REGION; do
+tail -n +2 output/4-rsid-to-positions/results.tsv | cut -f5 | while read REGION; do
   python src/scripts/python/filer_filter_then_overlaps.py \
     --genome-build hg38 \
     --region "$REGION" \

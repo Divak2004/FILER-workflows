@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Recipe 11 — Map rsIDs to Genomic Regions
+Recipe 04 — Map rsIDs to Genomic Regions
 
 Converts one or more dbSNP rsIDs to genomic coordinates using the Ensembl
 REST API and writes results as a TSV with one row per rsID–mapping.
