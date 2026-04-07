@@ -41,8 +41,7 @@ The `hitString` field set/order (and thus the number of tokens) varies by track 
 Each token corresponds to one value from the underlying feature record returned by FILER.
 See the schema file under the res folder.
 
-**Time:** Varies with the number of tracks and interval density. Expect ~1–2 seconds per
-batch of 50 tracks; 1960 tracks across 40 batches typically completes in 1–3 minutes.
+**Time:** Varies with the number of tracks and interval density. Expect roughly 1 minute per batch of 250 tracks
 
 ---
 

@@ -41,7 +41,12 @@ def coordinate_search(region: str, build: str, filters: dict) -> pd.DataFrame:
             sys.exit(1)
 
         data = r.json()
-        return pd.DataFrame(data) if data else pd.DataFrame()
+        if not data:
+            return pd.DataFrame()
+
+        df = pd.DataFrame(data)
+        df.insert(df.columns.get_loc("identifier") + 1, "queryRegion", region)
+        return df
 
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)

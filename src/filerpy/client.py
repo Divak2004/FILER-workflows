@@ -284,12 +284,9 @@ def get_overlapping_tracks(
     region: str,
     genome_build: str,
     **params,
-) -> list[dict]:
+) -> pd.DataFrame:
     """
     Find all tracks in a genome build whose intervals overlap a region.
-
-    This is a single GET request with no filtering or DataFrame logic —
-    that lives in ``filer_coordinate_search.py``.
 
     Parameters
     ----------
@@ -304,19 +301,31 @@ def get_overlapping_tracks(
 
     Returns
     -------
-    list[dict]
-        Raw response from the server, one dict per overlapping track.
+    pd.DataFrame
+        One row per overlapping track. A ``queryRegion`` column is inserted
+        immediately after ``identifier`` so callers can join/stack results
+        from multiple regions without losing provenance.
 
     Examples
     --------
-    >>> records = get_overlapping_tracks("chr1:100000-200000", "hg38", countOnly=1)
+    >>> df = get_overlapping_tracks("chr1:100000-200000", "hg38", countOnly=1)
     """
     r = _get(
         ENDPOINTS["region_overlaps"],
         params={"region": region, "genomeBuild": genome_build, "outputFormat": "json", **params},
         timeout=300,
     )
-    return r.json()
+    data = r.json()
+    if not data:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(data)
+    if "identifier" in df.columns:
+        df.insert(df.columns.get_loc("identifier") + 1, "queryRegion", region)
+    else:
+        df["queryRegion"] = region
+
+    return df
 
 
 # ---------------------------------------------------------------------------
