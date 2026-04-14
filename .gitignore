@@ -50,3 +50,7 @@ logs/
 
 # Output
 output/
+FILER_data/
+
+# Giggle
+FILER_giggle/

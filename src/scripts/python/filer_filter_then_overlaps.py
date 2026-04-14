@@ -9,11 +9,12 @@ Steps:
   1. Recipe 1 — query metadata endpoint to find tracks matching filters
   2. Recipe 3 — query coordinate endpoint to find tracks overlapping a region
   3. Intersect results from steps 1 and 2 on identifier, rank by num_overlaps
+     (union of all columns from both recipes is preserved)
   4. Recipe 2 — fetch actual overlapping intervals from the top N tracks
   5. Join interval table with track metadata into final output
 
 Usage:
-  python src/scripts/python/filer_workflow.py \\
+  python filer_filter_then_overlaps.py \\
     --genome-build hg38 \\
     --region "chr1:100000-200000" \\
     --assay "ATAC-seq" \\
@@ -26,16 +27,14 @@ Usage:
 import argparse
 import os
 import sys
-import json
 import requests
 import pandas as pd
 
 # ── Endpoints ────────────────────────────────────────────────────────────────
-METADATA_ENDPOINT   = "https://tf.lisanwanglab.org/FILER2/get_metadata.php"
-COORD_ENDPOINT      = "https://tf.lisanwanglab.org/FILER2/get_overlapping_tracks_by_coord.php"
-OVERLAPS_ENDPOINT   = "https://tf.lisanwanglab.org/FILER2/get_overlaps.php"
+METADATA_ENDPOINT = "https://tf.lisanwanglab.org/FILER2/get_metadata.php"
+COORD_ENDPOINT    = "https://tf.lisanwanglab.org/FILER2/get_overlapping_tracks_by_coord.php"
+OVERLAPS_ENDPOINT = "https://tf.lisanwanglab.org/FILER2/get_overlaps.php"
 
-# Separator used by FILER hit strings.
 HIT_SEP = "@@@"
 
 # ── Recipe 1 — metadata search ───────────────────────────────────────────────
@@ -79,7 +78,8 @@ def recipe3_coordinate_search(region: str, genome_build: str,
                                filter_string: str = ".") -> pd.DataFrame:
     """
     Query FILER coordinate endpoint. Always uses fullMetadata=1 so that
-    num_overlaps and all metadata fields are present for the intersection step.
+    num_overlaps and all metadata fields (including wget_command, file_size,
+    processed_file_md5, etc.) are present for the intersection step.
     """
     print(f"[workflow] Step 2 — querying coordinate endpoint for {region}...", file=sys.stderr)
     params = {
@@ -126,8 +126,7 @@ def recipe2_get_overlaps(region: str, track_ids: list,
                           chunk_size: int = 250) -> pd.DataFrame:
     """
     Fetch overlapping intervals for a list of track IDs in batches.
-    Returns one row per interval, where the interval feature dict is
-    serialized into `hitString` by joining feature values with `@@@`.
+    Returns one row per interval with identifier, queryRegion, and hitString.
     """
     batches = [track_ids[i:i+chunk_size] for i in range(0, len(track_ids), chunk_size)]
     print(
@@ -145,7 +144,6 @@ def recipe2_get_overlaps(region: str, track_ids: list,
             print(f"[workflow]   Warning: batch {i} failed — {e}", file=sys.stderr)
             continue
 
-        # Iterate nested features; one output row per interval feature.
         for _, row in df_batch.iterrows():
             identifier   = row.get("Identifier")
             query_region = row.get("queryRegion")
@@ -155,15 +153,12 @@ def recipe2_get_overlaps(region: str, track_ids: list,
             for feature in features:
                 if not isinstance(feature, dict):
                     continue
-                # Join values in dict iteration order (API-provided insertion order).
                 hit_string = HIT_SEP.join("" if v is None else str(v) for v in feature.values())
-                rows.append(
-                    {
-                        "identifier": identifier,
-                        "queryRegion": query_region,
-                        "hitString": hit_string,
-                    }
-                )
+                rows.append({
+                    "identifier":  identifier,
+                    "queryRegion": query_region,
+                    "hitString":   hit_string,
+                })
 
     return pd.DataFrame(rows)
 
@@ -172,16 +167,31 @@ def recipe2_get_overlaps(region: str, track_ids: list,
 
 def intersect_and_rank(r1: pd.DataFrame, r3: pd.DataFrame, top_n: int) -> pd.DataFrame:
     """
-    Inner-join Recipe 1 and Recipe 3 on identifier, rank by num_overlaps,
-    return top N rows.
+    Inner-join Recipe 1 and Recipe 3 on identifier, taking the UNION of all
+    columns from both. Where a column exists in both, Recipe 1's value is
+    preferred and Recipe 3's value fills in any nulls. Rows are ranked by
+    num_overlaps (from Recipe 3) and the top N are returned.
     """
-    print(f"[workflow] Step 3 — intersecting {len(r1)} (R1) × {len(r3)} (R3) tracks...",
-          file=sys.stderr)
+    print(
+        f"[workflow] Step 3 — intersecting {len(r1)} (R1) × {len(r3)} (R3) tracks...",
+        file=sys.stderr,
+    )
 
-    # Avoid duplicating columns that exist in both; keep all of R1, add num_overlaps from R3
-    r3_slim = r3[["identifier", "num_overlaps"]].copy()
-    merged  = r1.merge(r3_slim, on="identifier", how="inner")
-    merged  = merged.sort_values("num_overlaps", ascending=False)
+    merged = r1.merge(r3, on="identifier", how="inner", suffixes=("", "_r3"))
+
+    # Coalesce duplicate columns: prefer R1 value, fall back to R3
+    for col in r3.columns:
+        r3_col = f"{col}_r3"
+        if r3_col in merged.columns:
+            merged[col] = merged[col].combine_first(merged[r3_col])
+            merged.drop(columns=[r3_col], inplace=True)
+
+    # Ensure num_overlaps is present (comes from R3)
+    if "num_overlaps" not in merged.columns:
+        print("[workflow]   Warning: num_overlaps not found after merge; ordering may be arbitrary.",
+              file=sys.stderr)
+    else:
+        merged = merged.sort_values("num_overlaps", ascending=False)
 
     print(f"[workflow]   {len(merged)} tracks in common; selecting top {top_n}.", file=sys.stderr)
     return merged.head(top_n).reset_index(drop=True)
@@ -191,17 +201,16 @@ def intersect_and_rank(r1: pd.DataFrame, r3: pd.DataFrame, top_n: int) -> pd.Dat
 
 def join_results(r2: pd.DataFrame, top_tracks: pd.DataFrame) -> pd.DataFrame:
     """
-    Left-join Recipe 2 interval rows with the ranked track metadata.
-    Result is one row per interval, with full track metadata attached.
+    Left-join Recipe 2 interval rows with ranked track metadata.
+    Result is one row per interval with full track metadata attached.
+    Column order: identifier → queryRegion → hitString → metadata columns.
     """
     final = r2.merge(top_tracks, on="identifier", how="left")
 
-    # Preferred column order: identity → queryRegion → hitString → metadata
     front_cols = ["identifier", "queryRegion", "hitString"]
-    meta_cols = [c for c in top_tracks.columns if c != "identifier"]
-    ordered = front_cols + [c for c in meta_cols if c in final.columns]
-    # Include any unexpected extra columns at the end
-    extra = [c for c in final.columns if c not in ordered]
+    meta_cols  = [c for c in top_tracks.columns if c != "identifier"]
+    ordered    = front_cols + [c for c in meta_cols if c in final.columns]
+    extra      = [c for c in final.columns if c not in ordered]
     return final[ordered + extra]
 
 
@@ -226,11 +235,11 @@ def main():
 
     # Recipe 1 filters
     r1 = p.add_argument_group("Recipe 1 filters (metadata search)")
-    r1.add_argument("--assay",           help='e.g. "ATAC-seq"')
-    r1.add_argument("--cell-type",       help='e.g. "CD14+ monocyte"')
-    r1.add_argument("--tissue-category", help='e.g. "Blood"')
-    r1.add_argument("--data-source",     help='e.g. "ENCODE"')
-    r1.add_argument("--track-id",        help="Specific track identifier")
+    r1.add_argument("--assay")
+    r1.add_argument("--cell-type")
+    r1.add_argument("--tissue-category")
+    r1.add_argument("--data-source")
+    r1.add_argument("--track-id")
     r1.add_argument("--filter-string-r1", dest="filter_string_r1",
                     help="Raw jq filter for Recipe 1 (overrides named filters)")
 
@@ -247,7 +256,7 @@ def main():
     else:
         r1_filters = {}
         for friendly, php_param in PARAM_MAP.items():
-            val = getattr(args, friendly, None)
+            val = getattr(args, friendly.replace("-", "_"), None)
             if val:
                 r1_filters[php_param] = val
 
@@ -264,7 +273,7 @@ def main():
         sys.exit(0)
     print(f"[workflow]   {len(df_r3)} tracks from Recipe 3.", file=sys.stderr)
 
-    # ── Step 3: Intersect and rank ────────────────────────────────────────────
+    # ── Step 3: Intersect and rank (union of columns) ─────────────────────────
     top_tracks = intersect_and_rank(df_r1, df_r3, args.top)
     if top_tracks.empty:
         print("[workflow] No tracks in common between Recipe 1 and Recipe 3. Exiting.", file=sys.stderr)
