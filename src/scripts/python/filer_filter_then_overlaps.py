@@ -55,13 +55,26 @@ STANDARD_COLS = [
 
 
 def recipe1_search_tracks(genome_build: str, filters: dict) -> pd.DataFrame:
-    """Query FILER metadata endpoint. Returns one row per matching track."""
     params = {"genomeBuild": genome_build, "outputFormat": "json", **filters}
     print(f"[workflow] Step 1 — querying metadata endpoint...", file=sys.stderr)
 
     r = requests.get(METADATA_ENDPOINT, params=params, timeout=60)
     r.raise_for_status()
-    data = r.json()
+
+    if not r.text.strip():
+        print("[workflow]   Recipe 1: empty response from API.", file=sys.stderr)
+        return pd.DataFrame(columns=STANDARD_COLS)
+
+    if r.text.strip().startswith("ERROR"):
+        print(f"[workflow]   Recipe 1 API error: {r.text.strip()}", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        data = r.json()
+    except Exception as e:
+        print(f"[workflow]   Recipe 1: could not parse response as JSON: {e}", file=sys.stderr)
+        print(f"[workflow]   Raw response (first 500 chars): {r.text[:500]}", file=sys.stderr)
+        sys.exit(1)
 
     if not data:
         return pd.DataFrame(columns=STANDARD_COLS)
@@ -185,6 +198,8 @@ def intersect_and_rank(r1: pd.DataFrame, r3: pd.DataFrame, top_n: int) -> pd.Dat
         if r3_col in merged.columns:
             merged[col] = merged[col].combine_first(merged[r3_col])
             merged.drop(columns=[r3_col], inplace=True)
+    
+    print(f"[debug] columns after merge: {list(merged.columns)}", file=sys.stderr)
 
     # Ensure num_overlaps is present (comes from R3)
     if "num_overlaps" not in merged.columns:

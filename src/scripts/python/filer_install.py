@@ -412,8 +412,6 @@ def _detect_tsv_source(columns: set[str]) -> str:
     if missing:
         raise ValueError(
             f"Input TSV is missing required columns: {', '.join(sorted(missing))}.\n"
-            "  Supported sources: Recipe 3 output or Recipe 10 output (after union-column fix).\n"
-            "  Recipe 1 output alone is not supported for install."
         )
     if "wget_command" in columns:
         return "r3"   # wget_command present verbatim

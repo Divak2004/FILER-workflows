@@ -498,6 +498,37 @@ find FILER_data -type d -name giggle_index | while read IDX; do
 done
 ```
 
+#### Track discovery → install → query (Recipe 1 → 11)
+Start from a metadata search, install all matching tracks, then query the local index:
+
+```bash
+# Step 1: search for tracks by metadata (Recipe 1)
+python src/scripts/python/filer_install.py search \
+  --genome-build hg38 \
+  --assay "ATAC-seq" \
+  --tissue-category "Blood" \
+  --data-source "ENCODE" \
+  --out output/01-track-discovery/tracks.tsv
+
+# Step 2: install those tracks locally
+python src/scripts/python/filer_install.py install \
+  --from-tracks output/01-track-discovery/tracks.tsv \
+  --target-dir FILER_data \
+  --giggle giggle \
+  --tabix tabix
+
+# Step 3: find the giggle index(es) and query them
+find FILER_data -type d -name giggle_index | while read IDX; do
+  echo "=== $IDX ==="
+  giggle search -i "$IDX" -r "chr1:100000-200000" -c
+done
+
+# Step 4: inspect a specific track with tabix
+TRACK_PATH=$(awk -F'\t' 'NR==2 {print $2}' FILER_data/track_metadata.tsv)
+echo "Inspecting: $TRACK_PATH"
+tabix "$TRACK_PATH" "chr1:100000-200000"
+```
+
 #### Recipe 1 search → Recipe 3 discovery → install (no Recipe 10 wrapper)
 
 If you want more control over the individual steps rather than using the Recipe 10
@@ -543,15 +574,7 @@ python src/scripts/python/filer_install.py install \
 
 ## Notes
 
-**Supported TSV sources:** `--from-tracks` accepts Recipe 3 output and Recipe 10 output.
-Recipe 1 output alone is **not supported** because it lacks `file_size`,
-`processed_file_md5`, and download command fields needed for validated installs.
-
-| Source | Supported | Notes |
-|---|---|---|
-| Recipe 3 output | ✅ | Uses `wget_command` column verbatim |
-| Recipe 10 output | ✅ | Derives target directory from `processed_file_download_url`; requires union-column fix in `filer_filter_then_overlaps.py` |
-| Recipe 1 output | ❌ | Missing file size, MD5, and wget fields |
+**Supported TSV sources:** `--from-tracks` accepts Recipe 1, Recipe 3, and Recipe 10 outputs.
 
 **Directory structure:** downloaded files mirror the server's relative path (e.g.
 `FILER2/Annotationtracks/ENCODE/data/ATAC-seq/narrowpeak/hg38/`), so a selective
