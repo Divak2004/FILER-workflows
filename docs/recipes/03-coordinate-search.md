@@ -18,10 +18,19 @@ the track universe before querying.
 |---|---|---|---|
 | `region` | `region` | `chr1:100000-200000` | Yes |
 | `genome_build` | `genomeBuild` | `hg19`, `hg38` | Yes |
+| `assay` | (→ `filterString`) | `ATAC-seq`, `ChIP-seq` | No |
+| `cell_type` | (→ `filterString`) | `CD14+ monocyte`, `K562` | No |
+| `tissue_category` | (→ `filterString`) | `Blood`, `Brain` | No |
+| `data_source` | (→ `filterString`) | `ENCODE`, `Roadmap` | No |
+| `track_id` | (→ `filterString`) | `NGBLPL2W2SM2WC` | No |
 | `filter_string` | `filterString` | `.data_source == "ENCODE"` | No |
 | `full_metadata` | `fullMetadata` | `0` (default), `1` | No |
 | `count_only` | `countOnly` | `1` (default), `0` | No |
 | `output_format` | `outputFormat` | `json` (default), `html` | No |
+
+The convenience flags (`assay`, `cell_type`, `tissue_category`, `data_source`, `track_id`) mirror
+recipe 1 and are joined with `and` into a single jq `filterString`. Passing `--filter-string`
+explicitly overrides them.
 
 **`count_only` and `full_metadata` interaction:**
 
@@ -104,7 +113,19 @@ python src/scripts/python/filer_coordinate_search.py \
   --out output/03-coordinate-search/search_results.tsv
 ```
 
-Filter to ENCODE ATAC-seq tracks from adult blood (single data source):
+Use the recipe-1-style convenience flags (combined with `and` into a jq `filterString`):
+```bash
+python src/scripts/python/filer_coordinate_search.py \
+  --region "chr1:100000-200000" \
+  --genome-build hg38 \
+  --assay "ATAC-seq" \
+  --data-source "ENCODE" \
+  --tissue-category "Blood" \
+  --count-only 0 \
+  --out output/03-coordinate-search/search_results.tsv
+```
+
+Or pass a raw jq filter directly (overrides the convenience flags):
 ```bash
 python src/scripts/python/filer_coordinate_search.py \
   --region "chr1:100000-200000" \
@@ -114,7 +135,7 @@ python src/scripts/python/filer_coordinate_search.py \
   --out output/03-coordinate-search/search_results.tsv
 ```
 
-Filter across multiple data sources using OR:
+Filter across multiple data sources using OR (raw jq required for OR logic):
 ```bash
 python src/scripts/python/filer_coordinate_search.py \
   --region "chr1:100000-200000" \

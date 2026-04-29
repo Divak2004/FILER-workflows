@@ -621,6 +621,25 @@ def _install_from_tracks(args: argparse.Namespace) -> int:
             seen_ids.add(tid)
             tracks.append(row)
 
+    total_unique = len(tracks)
+
+    # Rank by num_overlaps and take top N if requested
+    if args.top is not None and args.top > 0:
+        if "num_overlaps" in columns:
+            def _num_overlaps_key(row: dict) -> int:
+                val = row.get("num_overlaps", "")
+                try:
+                    return int(val) if val else 0
+                except ValueError:
+                    return 0
+            tracks.sort(key=_num_overlaps_key, reverse=True)
+        else:
+            print(yellow(
+                f"  ⚠  --top {args.top} set but num_overlaps column missing; "
+                f"taking first {args.top} rows in input order."
+            ))
+        tracks = tracks[: args.top]
+
     target_dir = Path(args.target_dir)
     target_dir.mkdir(parents=True, exist_ok=True)
 
@@ -630,7 +649,10 @@ def _install_from_tracks(args: argparse.Namespace) -> int:
     print_header("FILER Install — From Tracks")
     print_kv("Source TSV",   str(tsv_path))
     print_kv("Source type",  f"Recipe {'3' if source == 'r3' else '10'} output")
-    print_kv("Tracks",       str(len(tracks)))
+    if args.top is not None and args.top > 0:
+        print_kv("Tracks",   f"{len(tracks)} (top {args.top} by num_overlaps of {total_unique} unique)")
+    else:
+        print_kv("Tracks",   str(len(tracks)))
     print_kv("Target dir",   str(target_dir))
     print_kv("Metadata out", str(meta_out))
     print_kv("Giggle",       args.giggle)
@@ -917,6 +939,10 @@ Download and index FILER annotation tracks. Two modes are available:
                     help="Download files but skip Giggle and tabix indexing.")
     ft.add_argument("--keep-going",  action="store_true",
                     help="Continue past individual download failures rather than stopping.")
+    ft.add_argument("--top",         metavar="N", type=int, default=None,
+                    help="Install only the top N tracks ranked by num_overlaps "
+                         "(descending). Applied after deduplication. If num_overlaps "
+                         "is absent from the input, takes the first N rows instead.")
 
     # ── Template mode args (positional, all optional when --from-tracks is set) ─
     tm = ip.add_argument_group("Template mode (wraps install_filer.sh)")

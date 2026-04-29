@@ -2,20 +2,26 @@
 
 ## What this does
 
-Runs three FILER endpoints in sequence and joins their outputs into a single
+Runs two FILER endpoints in sequence and joins their outputs into a single
 row-per-interval table:
 
-1. **Recipe 1** — query the metadata endpoint to find tracks matching biological
-   filters (assay, tissue, data source, etc.)
-2. **Recipe 3** — query the coordinate endpoint to find all tracks overlapping a
-   genomic region of interest
-3. **Intersect** — take the tracks common to both, rank by `num_overlaps`, keep top N
-4. **Recipe 2** — fetch the actual overlapping intervals from those top N tracks
-5. **Join** — attach full track metadata to every interval row
+1. **Recipe 3** — query the coordinate endpoint with a metadata filter to find
+   tracks that both match biological criteria (assay, tissue, data source, etc.)
+   and overlap a genomic region of interest.
+2. **Rank** — sort by `num_overlaps`, keep the top N.
+3. **Recipe 2** — fetch the actual overlapping intervals from those top N tracks.
+4. **Join** — attach full track metadata to every interval row.
 
 **Use when:** you have both a biological question (e.g. "ENCODE ATAC-seq blood tracks")
 and a genomic locus of interest (e.g. a GWAS hit), and you want the actual peak intervals
 from the most relevant tracks at that locus.
+
+> **Note:** Earlier versions of this recipe ran the metadata endpoint (Recipe 1) and the
+> coordinate endpoint (Recipe 3) separately and intersected the results. With
+> `fullMetadata=1`, Recipe 3 already returns the full metadata for each overlapping
+> track, so the separate Recipe 1 step is redundant — applying the same filter to
+> Recipe 3 produces an identical track set. Recipe 1 is still useful on its own when
+> you want the full track universe regardless of region (e.g. for [Recipe 11](./11-filer-selective-install.md)).
 
 ---
 
@@ -31,7 +37,10 @@ from the most relevant tracks at that locus.
 | `--chunk-size` | `250` (default) | No |
 | `--out` | `output/10-filter-then-overlaps/results.tsv` | No |
 
-### Recipe 1 filters (metadata search)
+### Metadata filters
+
+These flags mirror Recipe 3 and are joined with `and` into a single jq `filterString`
+applied server-side by the coordinate endpoint.
 
 | Parameter | Example values | Notes |
 |---|---|---|
@@ -40,13 +49,7 @@ from the most relevant tracks at that locus.
 | `--tissue-category` | `Blood`, `Brain` | |
 | `--data-source` | `ENCODE`, `Blueprint` | |
 | `--track-id` | `NGBLPL2W2SM2WC` | |
-| `--filter-string-r1` | `.data_source == "ENCODE" and .assay == "ATAC-seq"` | Overrides named filters |
-
-### Recipe 3 filters (coordinate search)
-
-| Parameter | Example values | Notes |
-|---|---|---|
-| `--filter-string-r3` | `.tissue_category == "Blood"` | jq-style, default: none |
+| `--filter-string` | `.data_source == "ENCODE" and .assay == "ATAC-seq"` | Raw jq, overrides named filters |
 
 ---
 
@@ -60,17 +63,20 @@ from the most relevant tracks at that locus.
 
 | Column | Source | Example value |
 |---|---|---|
-| `identifier` | All recipes | `NGBLPL2W2SM2WC` |
+| `identifier` | Recipe 3 | `NGBLPL2W2SM2WC` |
 | `queryRegion` | Recipe 2 | `chr1:100000-200000` |
 | `hitString` | Recipe 2 | `chr19@@@44905261@@@44906731@@@Peak_166852...` |
 | `num_overlaps` | Recipe 3 | `5` |
-| `assay` | Recipe 1 | `ATAC-seq` |
-| `tissue_category` | Recipe 1 | `Blood` |
-| `data_source` | Recipe 1 | `ENCODE` |
-| `track_name` | Recipe 1 | `ENCODE K562 ATAC-seq peaks` |
+| `assay` | Recipe 3 | `ATAC-seq` |
+| `tissue_category` | Recipe 3 | `Blood` |
+| `data_source` | Recipe 3 | `ENCODE` |
+| `track_name` | Recipe 3 | `ENCODE K562 ATAC-seq peaks` |
+| `processed_file_download_url` | Recipe 3 | `https://tf.lisanwanglab.org/GADB/…bed.gz` |
+| `processed_file_md5` | Recipe 3 | `3b5013b3bed9eb54...` |
+| `wget_command` | Recipe 3 | `wget https://… -P FILER2/Annotationtracks/…` |
 
 **Time:** Dominated by Recipe 3 (5–60 s) and Recipe 2 (~1 min per 250 tracks).
-Expect 2–5 minutes end-to-end for `--top 100`.
+Expect 1–3 minutes end-to-end for `--top 100`.
 
 ---
 
@@ -105,23 +111,22 @@ python src/scripts/python/filer_filter_then_overlaps.py \
   --out output/10-filter-then-overlaps/results.tsv
 ```
 
-Using raw jq filters for finer control over each step:
+Using a raw jq filter for finer control (e.g. OR logic across data sources):
 ```bash
 python src/scripts/python/filer_filter_then_overlaps.py \
   --genome-build hg38 \
   --region "chr1:100000-200000" \
-  --filter-string-r1 '.data_source == "ENCODE" and .assay == "ATAC-seq"' \
-  --filter-string-r3 '.tissue_category == "Blood" and .life_stage == "Adult"' \
+  --filter-string '(.data_source == "ENCODE" or .data_source == "Blueprint") and .assay == "ATAC-seq"' \
   --top 50 \
   --out output/10-filter-then-overlaps/results.tsv
 ```
 
-Querying a smaller region with multiple data sources:
+Querying a smaller region with a tighter filter:
 ```bash
 python src/scripts/python/filer_filter_then_overlaps.py \
   --genome-build hg38 \
   --region "chr19:44905791-44909393" \
-  --filter-string-r1 '(.data_source == "ENCODE" or .data_source == "Blueprint") and .assay == "ATAC-seq"' \
+  --filter-string '.data_source == "ENCODE" and .assay == "ATAC-seq" and .life_stage == "Adult"' \
   --top 100 \
   --out output/10-filter-then-overlaps/results.tsv
 ```
@@ -132,23 +137,18 @@ python src/scripts/python/filer_filter_then_overlaps.py \
 
 ## How the steps connect
 ```
-Recipe 1 (metadata filter)
-  └─ N tracks matching biological criteria
-                    ╲
-                     ╠═ intersect on identifier, rank by num_overlaps, top N
-                    ╱
-Recipe 3 (coordinate search)
-  └─ M tracks overlapping region
+Recipe 3 (coordinate search with metadata filter, fullMetadata=1)
+  └─ N tracks matching biological criteria AND overlapping the region
           │
           ▼
-    Top N track IDs
+    Sort by num_overlaps, keep top N
           │
           ▼
 Recipe 2 (get intervals)
   └─ one row per overlapping interval
           │
           ▼
-    Left-join with Recipe 1 metadata
+    Left-join with track metadata
           │
           ▼
     Final table: one row per interval + full metadata
@@ -158,21 +158,20 @@ Recipe 2 (get intervals)
 
 ## Notes
 
-**Intersection size:** if Recipe 1 and Recipe 3 share very few tracks in common
-(e.g. a highly specific tissue filter against a region with mostly different data sources),
-`--top N` may be smaller than N. The script reports the actual intersection size before
-querying Recipe 2.
+**`--filter-string` requires `fullMetadata=1`:** the script always sets this on the
+coordinate endpoint so that filters can be evaluated server-side and so that the
+returned metadata is rich enough for downstream use (e.g. [Recipe 11](./11-filer-selective-install.md)
+needs `processed_file_md5`, `file_size`, etc.).
 
-**`--filter-string-r1` vs `--filter-string-r3`:** these are independent filters applied
-at different stages. R1 filters the FILER metadata table directly. R3 filters are applied
-server-side after the giggle overlap search, and require `fullMetadata=1` to work — the
-script handles this automatically.
-
-:**Hit string:** the final table includes `hitString`, a FILER-formatted string built
+**Hit string:** the final table includes `hitString`, a FILER-formatted string built
 from the underlying feature dict values joined with `@@@`. The set/order of fields
 (and therefore the number of `@@@`-separated tokens) varies by track type.
 
-**Upstream recipes:** this workflow can also be run step-by-step using the individual
-recipe scripts. See [Recipe 1](../01-track-discovery/README.md),
-[Recipe 2](../02-track-overlaps/README.md), and
-[Recipe 3](../03-coordinate-search/README.md) for details.
+**Tracks with biology match but zero overlap:** because we use Recipe 3 with the
+filter applied server-side, tracks that match the biological filter but have no
+overlap in the region simply don't appear in the output. If you want to know the
+size of the full biological universe regardless of region, run [Recipe 1](./01-track-discovery.md)
+separately with the same filter.
+
+**Upstream recipes:** the individual steps can also be run on their own. See
+[Recipe 2](./02-track-overlaps.md) and [Recipe 3](./03-coordinate-search.md) for details.

@@ -2,8 +2,8 @@
 
 ## What this does
 
-Run the Recipe 10 workflow (metadata filter → coordinate search → overlap extraction)
-and then download and index the resulting tracks directly to a local directory using
+Run **Recipe 3** (coordinate search with a metadata filter) to find tracks overlapping
+your locus, then download and index those tracks directly to a local directory using
 `filer_install.py install --from-tracks`.
 
 This is the recommended path when you want a **biologically scoped local FILER
@@ -14,16 +14,27 @@ biological context — rather than installing the full FILER data archive.
 enhancer) and want a lightweight local copy of the tracks that overlap it, ready
 for offline querying with Giggle and tabix.
 
+> **Why Recipe 3 and not Recipe 10?** Recipe 3 with `--full-metadata` already returns
+> every column the installer needs (`identifier`, `file_name`, `file_size`,
+> `processed_file_md5`, `processed_file_download_url`/`wget_command`) plus
+> `num_overlaps`. The installer accepts a `--top N` flag that ranks by `num_overlaps`
+> and caps the install size, so you do not need Recipe 10 just to limit the number of
+> tracks. Recipe 10 wraps Recipe 3 with an additional Recipe 2 call to fetch
+> *interval-level* data (`hitString`), which the installer ignores. **Use Recipe 10 →
+> install only when you also want the per-interval `hitString` data preserved alongside
+> the install** (e.g. for downstream analysis of which peaks fell where). For pure
+> "find and download," Recipe 3 → install is faster and simpler.
+
 ---
 
 ## How the steps connect
 
 ```
-filer_filter_then_overlaps.py  (Recipes 1 + 3 + 2, joined)
-  └─ results.tsv   (one row per interval, full track metadata in every row)
+filer_coordinate_search.py --count-only 0 --full-metadata
+  └─ search_results.tsv   (one row per overlapping track, full metadata)
           │
           ▼
-filer_install.py install --from-tracks results.tsv
+filer_install.py install --from-tracks search_results.tsv
   ├─ deduplicate on identifier
   ├─ check disk space
   ├─ download each .bed.gz / .vcf.gz with size + MD5 verification
@@ -38,17 +49,17 @@ filer_install.py install --from-tracks results.tsv
 
 ## Inputs
 
-### `filer_filter_then_overlaps.py` parameters
+### `filer_coordinate_search.py` parameters
 
 | Parameter | Example values | Required |
 |---|---|---|
 | `--genome-build` | `hg19`, `hg38` | Yes |
 | `--region` | `chr1:100000-200000` | Yes |
-| `--top` | `100` (default) | No |
-| `--chunk-size` | `250` (default) | No |
-| `--out` | `output/11-selective-install/results.tsv` | No |
+| `--count-only` | `0` (must be `0` to get download URLs) | Yes |
+| `--full-metadata` | _(flag — required for installer)_ | Yes |
+| `--out` | `output/03-coordinate-search/search_results.tsv` | No |
 
-#### Recipe 1 filters (metadata search)
+#### Metadata filters (applied server-side via jq filterString)
 
 | Parameter | Example values | Notes |
 |---|---|---|
@@ -56,22 +67,18 @@ filer_install.py install --from-tracks results.tsv
 | `--cell-type` | `CD14+ monocyte` | |
 | `--tissue-category` | `Blood`, `Brain` | |
 | `--data-source` | `ENCODE`, `Blueprint` | |
-| `--filter-string-r1` | `.data_source == "ENCODE" and .assay == "ATAC-seq"` | Overrides named filters |
-
-#### Recipe 3 filters (coordinate search)
-
-| Parameter | Example values | Notes |
-|---|---|---|
-| `--filter-string-r3` | `.tissue_category == "Blood"` | jq-style, default: none |
+| `--track-id` | `NGBLPL2W2SM2WC` | |
+| `--filter-string` | `.data_source == "ENCODE" and .assay == "ATAC-seq"` | Raw jq, overrides named filters |
 
 ### `filer_install.py install --from-tracks` parameters
 
 | Parameter | Example values | Required |
 |---|---|---|
-| `--from-tracks` | `output/11-selective-install/results.tsv` | Yes |
+| `--from-tracks` | `output/03-coordinate-search/search_results.tsv` | Yes |
 | `--target-dir` | `FILER_data` | Yes |
 | `--giggle` | `giggle`, `/usr/local/bin/giggle` | Yes |
 | `--tabix` | `tabix`, `/usr/local/bin/tabix` | Yes |
+| `--top` | `100` (rank by `num_overlaps` desc, install only top N) | No |
 | `--skip-index` | _(flag)_ | No |
 | `--keep-going` | _(flag)_ | No |
 | `--verbose` | _(flag)_ | No |
@@ -80,33 +87,28 @@ filer_install.py install --from-tracks results.tsv
 
 ## Outputs
 
-### Step 1 — `filer_filter_then_overlaps.py`
+### Step 1 — `filer_coordinate_search.py`
 
 | File | Description |
 |---|---|
-| `results.tsv` | One row per overlapping interval with full track metadata attached (union of Recipe 1 and Recipe 3 columns) |
+| `search_results.tsv` | One row per overlapping track with full metadata (all columns required by the installer plus `num_overlaps`) |
 
-**Key columns in `results.tsv`:**
+**Key columns in `search_results.tsv`:**
 
-| Column | Source | Example value |
-|---|---|---|
-| `identifier` | All recipes | `NGBLPL2W2SM2WC` |
-| `queryRegion` | Recipe 2 | `chr1:100000-200000` |
-| `hitString` | Recipe 2 | `chr1@@@100423@@@101205@@@Peak_99...` |
-| `num_overlaps` | Recipe 3 | `5` |
-| `assay` | Recipe 1 | `ATAC-seq` |
-| `tissue_category` | Recipe 1 | `Blood` |
-| `data_source` | Recipe 1 | `ENCODE` |
-| `track_name` | Recipe 1 | `ENCODE K562 ATAC-seq peaks` |
-| `file_name` | Recipe 3 | `ENCFF006OFA.bed.gz` |
-| `file_size` | Recipe 3 | `5064124` |
-| `processed_file_md5` | Recipe 3 | `3b5013b3bed9eb54...` |
-| `wget_command` | Recipe 3 | `wget https://… -P FILER2/Annotationtracks/…` |
-| `processed_file_download_url` | Recipe 3 | `https://tf.lisanwanglab.org/GADB/…bed.gz` |
-| `tabix_index_download` | Recipe 3 | `wget https://…bed.gz.tbi -P …` |
-
-> **Note:** `results.tsv` has one row per overlapping **interval**, not per track. The
-> install step deduplicates on `identifier` automatically before downloading.
+| Column | Example value |
+|---|---|
+| `identifier` | `NGBLPL2W2SM2WC` |
+| `num_overlaps` | `5` |
+| `assay` | `ATAC-seq` |
+| `tissue_category` | `Blood` |
+| `data_source` | `ENCODE` |
+| `track_name` | `ENCODE K562 ATAC-seq peaks` |
+| `file_name` | `ENCFF006OFA.bed.gz` |
+| `file_size` | `5064124` |
+| `processed_file_md5` | `3b5013b3bed9eb54...` |
+| `wget_command` | `wget https://… -P FILER2/Annotationtracks/…` |
+| `processed_file_download_url` | `https://tf.lisanwanglab.org/GADB/…bed.gz` |
+| `tabix_index_download` | `wget https://…bed.gz.tbi -P …` |
 
 ### Step 2 — `filer_install.py install --from-tracks`
 
@@ -118,9 +120,9 @@ filer_install.py install --from-tracks results.tsv
 | `<target-dir>/track_metadata.tsv` | One row per downloaded track with all metadata columns plus `local_path` |
 
 **Time:**
-- `filer_filter_then_overlaps.py`: 2–5 minutes end-to-end for `--top 100` (dominated by Recipe 3 and Recipe 2).
-- `filer_install.py install --from-tracks`: depends on total file size and network speed; MD5
-  verification is performed on every file after download.
+- `filer_coordinate_search.py`: 5–60 seconds depending on region size and filter breadth.
+- `filer_install.py install --from-tracks`: depends on total file size and network speed;
+  MD5 verification is performed on every file after download.
 
 ---
 
@@ -251,37 +253,39 @@ No authentication is required for public FILER data.
 Basic usage — ENCODE ATAC-seq blood tracks overlapping a locus, then install locally:
 
 ```bash
-# Step 1: run the workflow to find and extract relevant tracks
-python src/scripts/python/filer_filter_then_overlaps.py \
+# Step 1: find tracks at the locus matching the biological filter
+python src/scripts/python/filer_coordinate_search.py \
   --genome-build hg38 \
   --region "chr1:100000-200000" \
   --assay "ATAC-seq" \
   --tissue-category "Blood" \
   --data-source "ENCODE" \
-  --top 100 \
-  --out output/11-selective-install/results.tsv
+  --count-only 0 \
+  --full-metadata \
+  --out output/03-coordinate-search/search_results.tsv
 
 # Step 2: install only those tracks
 python src/scripts/python/filer_install.py install \
-  --from-tracks output/11-selective-install/results.tsv \
+  --from-tracks output/03-coordinate-search/search_results.tsv \
   --target-dir FILER_data \
   --giggle giggle \
-  --tabix tabix
+  --tabix tabix \
+  --top 100
 ```
 
-Using raw jq filters for finer control over each recipe step:
+Using a raw jq filter for finer control (e.g. OR logic across data sources):
 
 ```bash
-python filer_filter_then_overlaps.py \
+python src/scripts/python/filer_coordinate_search.py \
   --genome-build hg38 \
   --region "chr19:44905791-44909393" \
-  --filter-string-r1 '.data_source == "ENCODE" and .assay == "ATAC-seq"' \
-  --filter-string-r3 '.tissue_category == "Blood" and .life_stage == "Adult"' \
-  --top 50 \
-  --out output/11-selective-install/results.tsv
+  --filter-string '.data_source == "ENCODE" and .assay == "ATAC-seq" and .life_stage == "Adult"' \
+  --count-only 0 \
+  --full-metadata \
+  --out output/03-coordinate-search/search_results.tsv
 
-python filer_install.py install \
-  --from-tracks output/11-selective-install/results.tsv \
+python src/scripts/python/filer_install.py install \
+  --from-tracks output/03-coordinate-search/search_results.tsv \
   --target-dir FILER_data \
   --giggle giggle \
   --tabix tabix
@@ -290,8 +294,8 @@ python filer_install.py install \
 Download only, skip indexing (useful for staging files before indexing separately):
 
 ```bash
-python filer_install.py install \
-  --from-tracks output/11-selective-install/results.tsv \
+python src/scripts/python/filer_install.py install \
+  --from-tracks output/03-coordinate-search/search_results.tsv \
   --target-dir FILER_data \
   --giggle giggle \
   --tabix tabix \
@@ -301,8 +305,8 @@ python filer_install.py install \
 Continue past individual download failures rather than stopping on the first error:
 
 ```bash
-python filer_install.py install \
-  --from-tracks output/11-selective-install/results.tsv \
+python src/scripts/python/filer_install.py install \
+  --from-tracks output/03-coordinate-search/search_results.tsv \
   --target-dir FILER_data \
   --giggle giggle \
   --tabix tabix \
@@ -310,11 +314,53 @@ python filer_install.py install \
   --verbose
 ```
 
+Cap the install at the top 100 most-overlapping tracks (useful when a broad filter
+returns many tracks):
+
+```bash
+python src/scripts/python/filer_install.py install \
+  --from-tracks output/03-coordinate-search/search_results.tsv \
+  --target-dir FILER_data \
+  --giggle giggle \
+  --tabix tabix \
+  --top 100
+```
+
+The installer ranks rows by `num_overlaps` descending after deduplication, then keeps
+the top N. If the input TSV has no `num_overlaps` column (e.g. Recipe 1 output) the
+installer takes the first N rows and prints a warning.
+
+#### Alternative: Recipe 10 → install (when you need per-interval `hitString` data)
+
+Use Recipe 10 instead of Recipe 3 when you want the per-interval `hitString` data
+preserved alongside the install for downstream analysis (e.g. of which peaks fell
+where). For ranking/top-N alone, prefer the installer's `--top` flag above — it
+avoids the extra Recipe 2 API call.
+
+```bash
+# Step 1: Recipe 10 fetches both ranking and per-interval data
+python src/scripts/python/filer_filter_then_overlaps.py \
+  --genome-build hg38 \
+  --region "chr1:100000-200000" \
+  --assay "ATAC-seq" \
+  --tissue-category "Blood" \
+  --data-source "ENCODE" \
+  --top 100 \
+  --out output/10-filter-then-overlaps/results.tsv
+
+# Step 2: install — dedupes per-interval rows on identifier automatically
+python src/scripts/python/filer_install.py install \
+  --from-tracks output/10-filter-then-overlaps/results.tsv \
+  --target-dir FILER_data \
+  --giggle giggle \
+  --tabix tabix
+```
+
 ### Integration examples
 
 These examples show how to chain other recipes into the Recipe 11 install + query workflow.
 
-#### rsID → install → query (Recipe 4 → 10 → 11)
+#### rsID → install → query (Recipe 4 → 3 → 11)
 
 Start from a GWAS variant, resolve it to a genomic region, find and install overlapping
 ATAC-seq tracks, then query the local index:
@@ -330,19 +376,20 @@ python src/scripts/python/rsid_to_positions.py \
 REGION=$(awk 'NR==2 {print $5}' output/4-rsid-to-positions/results.tsv)
 echo "Resolved region: $REGION"
 
-# Step 3: run the Recipe 10 workflow with metadata filters
-python src/scripts/python/filer_filter_then_overlaps.py \
+# Step 3: find tracks overlapping the region matching the biological filter (Recipe 3)
+python src/scripts/python/filer_coordinate_search.py \
   --genome-build hg38 \
   --region "$REGION" \
   --assay "ATAC-seq" \
   --tissue-category "Blood" \
   --data-source "ENCODE" \
-  --top 100 \
-  --out output/11-selective-install/results.tsv
+  --count-only 0 \
+  --full-metadata \
+  --out output/03-coordinate-search/search_results.tsv
 
 # Step 4: install the tracks locally
 python src/scripts/python/filer_install.py install \
-  --from-tracks output/11-selective-install/results.tsv \
+  --from-tracks output/03-coordinate-search/search_results.tsv \
   --target-dir FILER_data \
   --giggle giggle \
   --tabix tabix
@@ -355,7 +402,7 @@ find FILER_data -type d -name giggle_index | while read IDX; do
 done
 ```
 
-#### Gene symbol → install → query (Recipe 5 → 10 → 11)
+#### Gene symbol → install → query (Recipe 5 → 3 → 11)
 
 Start from a gene of interest, install overlapping tracks for the gene body, then
 drill into a specific track:
@@ -371,18 +418,19 @@ python src/scripts/python/gene_to_positions.py \
 REGION=$(awk 'NR==2 {print $6}' output/05-gene-to-positions/results.tsv)
 echo "Resolved region: $REGION"
 
-# Step 3: find and extract relevant tracks
-python src/scripts/python/filer_filter_then_overlaps.py \
+# Step 3: find tracks overlapping the gene body (Recipe 3)
+python src/scripts/python/filer_coordinate_search.py \
   --genome-build hg38 \
   --region "$REGION" \
   --assay "ChIP-seq" \
   --tissue-category "Breast" \
-  --top 50 \
-  --out output/11-selective-install/results.tsv
+  --count-only 0 \
+  --full-metadata \
+  --out output/03-coordinate-search/search_results.tsv
 
 # Step 4: install
 python src/scripts/python/filer_install.py install \
-  --from-tracks output/11-selective-install/results.tsv \
+  --from-tracks output/03-coordinate-search/search_results.tsv \
   --target-dir FILER_data \
   --giggle giggle \
   --tabix tabix
@@ -400,7 +448,7 @@ echo "Inspecting: $TRACK_PATH"
 tabix "$TRACK_PATH" "$REGION"
 ```
 
-#### Batch rsIDs → install all into a shared index (Recipe 4 → 10 → 11)
+#### Batch rsIDs → install all into a shared index (Recipe 4 → 3 → 11)
 
 Process a list of GWAS variants, collect results into a shared install directory,
 then query across all of them:
@@ -412,17 +460,18 @@ python src/scripts/python/rsid_to_positions.py \
   --genome-build GRCh38 \
   --out output/4-rsid-to-positions/results.tsv
 
-# Step 2: run Recipe 10 for each region, collecting results
+# Step 2: run Recipe 3 for each region, collecting results
 mkdir -p output/11-selective-install/batch
 tail -n +2 output/4-rsid-to-positions/results.tsv | while IFS=$'\t' read -r RSID CHROM START END REGION ALLELE STRAND ASM; do
   SAFE_NAME="${REGION//[^a-zA-Z0-9]/_}"
   echo "Processing $RSID → $REGION"
-  python src/scripts/python/filer_filter_then_overlaps.py \
+  python src/scripts/python/filer_coordinate_search.py \
     --genome-build hg38 \
     --region "$REGION" \
     --assay "ATAC-seq" \
     --data-source "ENCODE" \
-    --top 50 \
+    --count-only 0 \
+    --full-metadata \
     --out "output/11-selective-install/batch/${SAFE_NAME}.tsv"
 done
 
@@ -450,7 +499,7 @@ find FILER_data -type d -name giggle_index | while read IDX; do
 done
 ```
 
-#### Batch genes → install and query (Recipe 5 → 10 → 11)
+#### Batch genes → install and query (Recipe 5 → 3 → 11)
 
 Same pattern as above but starting from gene symbols:
 
@@ -461,17 +510,18 @@ python src/scripts/python/gene_to_positions.py \
   --genome-build GRCh38 \
   --out output/05-gene-to-positions/results.tsv
 
-# Step 2: run Recipe 10 for each gene region
+# Step 2: run Recipe 3 for each gene region
 mkdir -p output/11-selective-install/batch
 tail -n +2 output/05-gene-to-positions/results.tsv | while IFS=$'\t' read -r GENE ENSID CHROM START END REGION STRAND ASM; do
   SAFE_NAME="${GENE}"
   echo "Processing $GENE → $REGION"
-  python src/scripts/python/filer_filter_then_overlaps.py \
+  python src/scripts/python/filer_coordinate_search.py \
     --genome-build hg38 \
     --region "$REGION" \
     --assay "DNase-seq" \
     --tissue-category "Brain" \
-    --top 50 \
+    --count-only 0 \
+    --full-metadata \
     --out "output/11-selective-install/batch/${SAFE_NAME}.tsv"
 done
 
@@ -529,62 +579,31 @@ echo "Inspecting: $TRACK_PATH"
 tabix "$TRACK_PATH" "chr1:100000-200000"
 ```
 
-#### Recipe 1 search → Recipe 3 discovery → install (no Recipe 10 wrapper)
-
-If you want more control over the individual steps rather than using the Recipe 10
-wrapper, you can chain Recipes 1 and 3 manually and then install:
-
-```bash
-# Step 1: search for tracks by metadata (Recipe 1)
-python src/scripts/python/filer_search_tracks.py \
-  --genome-build hg38 \
-  --assay "ATAC-seq" \
-  --data-source "ENCODE" \
-  --tissue-category "Blood" \
-  --out output/01-track-discovery/tracks.tsv
-
-# Step 2: find which of those tracks overlap your region (Recipe 3)
-python src/scripts/python/filer_coordinate_search.py \
-  --region "chr1:100000-200000" \
-  --genome-build hg38 \
-  --count-only 0 \
-  --full-metadata \
-  --out output/03-coordinate-search/search_results.tsv
-
-# Step 3: install tracks from the coordinate search results
-#         (Recipe 3 output with full metadata has all required columns)
-python src/scripts/python/filer_install.py install \
-  --from-tracks output/03-coordinate-search/search_results.tsv \
-  --target-dir FILER_data \
-  --giggle giggle \
-  --tabix tabix
-```
-
-> **Note:** When using Recipe 3 output directly (instead of Recipe 10 output), make sure
-> you ran the coordinate search with `--count-only 0 --full-metadata` so that the output
-> includes `file_name`, `file_size`, `processed_file_md5`, and either `wget_command` or
-> `processed_file_download_url` — all of which are required by the installer.
-
 ### Full scripts
 
-- [`filer_filter_then_overlaps.py`](../../src/scripts/python/filer_filter_then_overlaps.py) — Recipe 10 workflow (Recipes 1 + 3 + 2, joined with union columns)
+- [`filer_coordinate_search.py`](../../src/scripts/python/filer_coordinate_search.py) — Recipe 3 (default upstream for this recipe)
+- [`filer_filter_then_overlaps.py`](../../src/scripts/python/filer_filter_then_overlaps.py) — Recipe 10 (alternative upstream when ranking or interval data is needed)
 - [`filer_install.py`](../../src/scripts/python/filer_install.py) — Unified FILER CLI (`search` and `install` subcommands)
 
 ---
 
 ## Notes
 
-**Supported TSV sources:** `--from-tracks` accepts Recipe 1, Recipe 3, and Recipe 10 outputs.
+**Supported TSV sources:** `--from-tracks` accepts Recipe 3 (with `--count-only 0
+--full-metadata`), Recipe 10, and Recipe 1 outputs. The required columns are
+`identifier`, `file_name`, `file_size`, `processed_file_md5`, and either `wget_command`
+or `processed_file_download_url` — all present in Recipe 3 output by default and in
+Recipe 10 output (which embeds the same Recipe 3 columns).
 
 **Directory structure:** downloaded files mirror the server's relative path (e.g.
 `FILER2/Annotationtracks/ENCODE/data/ATAC-seq/narrowpeak/hg38/`), so a selective
 installation is structurally compatible with a full FILER installation in the same
 target directory.
 
-**Deduplication:** `results.tsv` from Recipe 10 contains one row per overlapping
-interval, which means a single track file appears in multiple rows. The install step
-automatically deduplicates on `identifier` before downloading, so each file is
-downloaded exactly once.
+**Deduplication:** Recipe 3 output is one row per track, so no dedup is needed.
+Recipe 10 output is one row per overlapping *interval*, so a single track file appears
+in multiple rows; the install step automatically deduplicates on `identifier` before
+downloading, so each file is downloaded exactly once either way.
 
 **MD5 verification:** every file is verified against `processed_file_md5` after
 download. If verification fails, the file is deleted and reported as an error. Use
@@ -594,10 +613,9 @@ download. If verification fails, the file is deleted and reported as an error. U
 MD5, it is skipped without re-downloading. This makes it safe to re-run the install
 step after a partial failure.
 
-**Upstream recipes:** this workflow can also be run step-by-step using the individual
-recipe scripts. See [Recipe 1](../01-track-discovery/README.md),
-[Recipe 2](../02-track-overlaps/README.md), [Recipe 3](../03-coordinate-search/README.md),
-and [Recipe 10](../10-filter-then-overlaps/README.md) for details.
+**Upstream recipes:** see [Recipe 3](./03-coordinate-search.md) for the default upstream
+step, [Recipe 10](./10-filter-then-overlaps.md) for ranking/interval-data variants, and
+[Recipe 1](./01-track-discovery.md) for the metadata-only path.
 
 ---
 
