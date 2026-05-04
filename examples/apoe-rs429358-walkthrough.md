@@ -1,4 +1,4 @@
-# Worked Example — Does the APOE-ε4 variant rs429358 sit in active brain chromatin?
+# Does the APOE-ε4 variant rs429358 sit in active brain chromatin?
 
 ## The question
 
@@ -17,12 +17,9 @@ Recipe 4 (rsid_to_positions.py)
   rs429358 → chr19:44908684-44908685
         │
         ▼
-Recipe 3 (filer_coordinate_search.py)
-  Find brain ATAC-seq / ChIP-seq tracks overlapping that position
-        │
-        ▼
-Recipe 2 (filer_find_overlaps.py)
-  Pull the actual peak intervals from those tracks
+Recipe 10 (filer_filter_then_overlaps.py)
+  Find brain ATAC-seq / ChIP-seq tracks at that position AND pull
+  their peak intervals — one row per overlap, with full track metadata
         │
         ▼
 Recipe 11 (filer_install.py install --from-tracks)
@@ -43,34 +40,29 @@ REGION=$(awk 'NR==2 {print $5}' output/4-rsid-to-positions/results.tsv)
 echo "$REGION"   # → chr19:44908684-44908685
 ```
 
-### Step 2 — Find brain regulatory tracks overlapping the variant (Recipe 3)
+### Step 2 — Find brain regulatory tracks AND pull their peak intervals (Recipe 10)
+
+Recipe 10 chains Recipe 3 (coordinate search with metadata filter) and Recipe 2
+(interval extraction) into one call. Output is one row per overlapping interval
+with full track metadata attached.
 
 ```bash
-python src/scripts/python/filer_coordinate_search.py \
+python src/scripts/python/filer_filter_then_overlaps.py \
   --genome-build hg38 \
   --region "$REGION" \
   --filter-string '.tissue_category == "Brain" and (.assay == "ATAC-seq" or .assay == "ChIP-seq")' \
-  --count-only 0 \
-  --full-metadata \
-  --out output/03-coordinate-search/search_results.tsv
+  --top 200 \
+  --out output/10-filter-then-overlaps/brain_apoe.tsv
 ```
 
-### Step 3 — Pull the actual peak intervals (Recipe 2)
+### Step 3 (optional) — Install the relevant tracks locally (Recipe 11)
 
-```bash
-python src/scripts/python/filer_find_overlaps.py \
-  --region "$REGION" \
-  --file output/03-coordinate-search/search_results.tsv \
-  --id-col identifier \
-  --out output/02-track-overlaps/overlaps.tsv \
-  --json
-```
-
-### Step 4 (optional) — Install the relevant tracks locally (Recipe 11)
+Recipe 11 dedupes the input on `identifier`, so it consumes Recipe 10's
+interval-level output directly without any reshape.
 
 ```bash
 python src/scripts/python/filer_install.py install \
-  --from-tracks output/03-coordinate-search/search_results.tsv \
+  --from-tracks output/10-filter-then-overlaps/brain_apoe.tsv \
   --target-dir FILER_data \
   --giggle giggle \
   --tabix tabix \
@@ -85,7 +77,7 @@ The resolved local path of each track is stored in the `local_path` column
 of `FILER_data/track_metadata.tsv`. You can now query the local copy without
 touching the network.
 
-### Step 5 (optional) — Query the local indices
+### Step 4 (optional) — Query the local indices
 
 #### Tabix — pull peaks overlapping rs429358 from a single track
 

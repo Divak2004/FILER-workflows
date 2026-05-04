@@ -177,6 +177,15 @@ def main():
         default=CHUNK_SIZE,
         help=f"Max track IDs per GET request (default: {CHUNK_SIZE})",
     )
+    p.add_argument(
+        "--top",
+        type=int,
+        default=None,
+        help="Process only the first N track IDs after loading (default: all). "
+             "Order is preserved from --track-ids or the --file column, so for "
+             "an upstream-ranked file (e.g. Recipe 3 sorted by num_overlaps) "
+             "this keeps the top-ranked tracks.",
+    )
 
     args = p.parse_args()
 
@@ -195,6 +204,13 @@ def main():
     if not ids:
         print("[recipe02] Error: no track IDs resolved.", file=sys.stderr)
         sys.exit(1)
+
+    if args.top is not None and args.top > 0 and len(ids) > args.top:
+        print(
+            f"[recipe02] --top={args.top}: keeping first {args.top} of {len(ids)} track ID(s).",
+            file=sys.stderr,
+        )
+        ids = ids[: args.top]
 
     print(f"[recipe02] Querying region '{args.region}' against {len(ids)} track(s)...", file=sys.stderr)
 

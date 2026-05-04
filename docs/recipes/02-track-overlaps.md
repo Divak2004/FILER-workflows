@@ -16,6 +16,7 @@ Query the FILER overlaps endpoint with a genomic region and a list of track IDs,
 | `track_ids` | `trackIDs` | `NGBLPL2W2SM2WC,NG123` | Yes (or `--file`) |
 | `--file` | _(reads `trackIDs` from a TSV/JSON file)_ | `output/01-track-discovery/tracks.tsv` | Yes (or `--track-ids`) |
 | `--id-col` | _(column name in `--file`)_ | `identifier` (default) | No |
+| `--top` | _(keep only the first N track IDs after loading)_ | `50` | No |
 
 The region must be in `chrN:start-end` format (e.g. `chr1:100000-200000`).
 
@@ -95,6 +96,21 @@ python src/scripts/python/filer_find_overlaps.py \
   --id-col identifier \
   --out output/02-track-overlaps/overlaps.tsv \
   --chunk-size 100 \
+  --json
+```
+
+Cap the run at the first N tracks in the file. Order is preserved from the
+file, so if the upstream TSV is already ranked (e.g. Recipe 3 sorted by
+`num_overlaps`) this keeps the top-N most relevant tracks and skips the long
+tail.
+
+```bash
+python src/scripts/python/filer_find_overlaps.py \
+  --region "chr19:44905791-44909393" \
+  --file output/03-coordinate-search/search_results.tsv \
+  --id-col identifier \
+  --top 50 \
+  --out output/02-track-overlaps/overlaps.tsv \
   --json
 ```
 
