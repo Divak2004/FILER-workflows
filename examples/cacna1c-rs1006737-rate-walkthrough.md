@@ -22,7 +22,7 @@ per track → numerator + ranking).
 
 ```
 Recipe 5 (gene_to_positions.py)
-  CACNA1C → chr12:2035683-2697950
+  CACNA1C → chr12:1970771-2697950
         │
         ├──────────────────────────────────────┐
         ▼                                      ▼
@@ -55,7 +55,7 @@ python src/scripts/python/gene_to_positions.py \
 
 # Recipe 5 emits the FILER-ready region string in column 6.
 REGION=$(awk 'NR==2 {print $6}' output/05-gene-to-positions/cacna1c.tsv)
-echo "$REGION"   # e.g. chr12:2035683-2697950
+echo "$REGION"   # e.g. chr12:1970771-2697950
 ```
 
 The gene body is the region of interest — no expansion window needed. CACNA1C
